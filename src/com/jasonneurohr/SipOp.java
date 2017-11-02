@@ -8,16 +8,12 @@ import java.net.UnknownHostException;
  * <h1>SipOp</h1>
  * The SipOp class provides methods for exchanging various SIP messages
  * with a target SIP device. TCP port 5060 is assumed for all exchanges.
- * <p>
- * To-do List<br>
- * - Delayed offer ACK<br>
- * </p>
- * @author Jason Neurohr
  *
+ * @author Jason Neurohr
  */
 public class SipOp {
     private Socket sipSocket = null; // Client socket
-    private DataOutputStream os = null; // Output stream
+    private BufferedOutputStream os = null;
     private DataInputStream is = null; // Input stream
     private String responseTag = "";
     private boolean okReceived = false;
@@ -37,9 +33,9 @@ public class SipOp {
     /**
      * Constructs a SipOp instance with provided parameters and a callId
      *
-     * @param destinationUriDomainPart       The target SIP device
-     * @param destinationUriUserPart The user part of the SIP uri (preceding the '@')
-     * @param sourceIp            The source IP
+     * @param destinationUriDomainPart The target SIP device
+     * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
+     * @param sourceIp                 The source IP
      */
     SipOp(String destinationSipUa, String destinationUriUserPart, String destinationUriDomainPart, String sourceIp) {
         this.destinationSipUa = destinationSipUa;
@@ -151,7 +147,7 @@ public class SipOp {
         // Try to open input and output streams
         try {
             sipSocket = new Socket(destinationSipUa, 5060);
-            os = new DataOutputStream(sipSocket.getOutputStream());
+            os = new BufferedOutputStream(sipSocket.getOutputStream());
             is = new DataInputStream(sipSocket.getInputStream());
         } catch (UnknownHostException e) {
             System.err.println("Don't know about host: hostname");
@@ -219,42 +215,45 @@ public class SipOp {
     /**
      * Sends a SIP early offer INVITE message to the target SIP device
      *
-     * @param destinationUriDomainPart       The target SIP device
-     * @param destinationUriUserPart The user part of the SIP uri (preceding the '@')
-     * @param sourceIp            The source IP
-     * @param os                  The output stream
-     * @param cseq                The SIP command sequence
+     * @param destinationUriDomainPart The target SIP device
+     * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
+     * @param sourceIp                 The source IP
+     * @param os                       The output stream
+     * @param cseq                     The SIP command sequence
      */
     private void sendEarlyOfferInvite(String destinationUriDomainPart, String destinationUriUserPart,
-                                      String sourceIp, DataOutputStream os, String cseq, String callId) {
+                                      String sourceIp, BufferedOutputStream os, String cseq, String callId) {
         try {
-            // Early offer (sdp included)
-            os.writeBytes("INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n");
-            os.writeBytes("Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n");
-            os.writeBytes("From: <sip:99999@" + sourceIp + ">;tag=456\r\n");
-            os.writeBytes("To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>\r\n");
-            os.writeBytes("Call-ID: " + callId + "@" + sourceIp + "\r\n");
-            os.writeBytes("CSeq: " + cseq + " INVITE\r\n");
-            os.writeBytes("Content-Type: application/sdp\r\n");
-            os.writeBytes("Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n");
-            os.writeBytes("User-Agent: SIP Probe\r\n");
-            os.writeBytes("Max-Forwards: 10\r\n");
-            os.writeBytes("Supported: replaces,timer\r\n");
-            os.writeBytes("P-Asserted-Identity: <sip:99999@" + sourceIp + ">\r\n");
-            os.writeBytes("Allow: INVITE,BYE,CANCEL,ACK,REGISTER,SUBSCRIBE,NOTIFY,MESSAGE,INFO,REFER,OPTIONS,PUBLISH,PRACK\r\n");
-            os.writeBytes("Content-Type: application/sdp\r\n");
-            os.writeBytes("Content-Length: 207\r\n\r\n");
-            os.writeBytes("o=SP 12345 IN IP4 " + sourceIp + "\r\n");
-            os.writeBytes("s=-\r\n");
-            os.writeBytes("p=11111\r\n");
-            os.writeBytes("t=0 0\r\n");
-            os.writeBytes("m=audio " + randPort() + " RTP/AVP 8 101\r\n");
-            os.writeBytes("c=IN IP4 " + sourceIp + "\r\n");
-            os.writeBytes("a=rtpmap:8 PCMA/8000\r\n");
-            os.writeBytes("a=rtpmap:101 telephone-event/8000\r\n");
-            os.writeBytes("a=fmtp:101 0-15\r\n");
-            os.writeBytes("a=ptime:20\r\n");
-            os.writeBytes("a=sendrecv\r\n\r\n");
+            String earlyOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+                    "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>\r\n" +
+                    "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
+                    "CSeq: " + cseq + " INVITE\r\n" +
+                    "Content-Type: application/sdp\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "User-Agent: SIP Probe\r\n" +
+                    "Max-Forwards: 10\r\n" +
+                    "Supported: replaces,timer\r\n" +
+                    "P-Asserted-Identity: <sip:99999@" + sourceIp + ">\r\n" +
+                    "Allow: INVITE,BYE,CANCEL,ACK,REGISTER,SUBSCRIBE,NOTIFY,MESSAGE,INFO,REFER,OPTIONS,PUBLISH,PRACK\r\n" +
+                    "Content-Type: application/sdp\r\n" +
+                    "Content-Length: 207\r\n\r\n" +
+                    "o=SP 12345 IN IP4 " + sourceIp + "\r\n" +
+                    "s=-\r\n" +
+                    "p=11111\r\n" +
+                    "t=0 0\r\n" +
+                    "m=audio " + randPort() + " RTP/AVP 8 101\r\n" +
+                    "c=IN IP4 " + sourceIp + "\r\n" +
+                    "a=rtpmap:8 PCMA/8000\r\n" +
+                    "a=rtpmap:101 telephone-event/8000\r\n" +
+                    "a=fmtp:101 0-15\r\n" +
+                    "a=ptime:20\r\n" +
+                    "a=sendrecv\r\n\r\n";
+
+            os.write(earlyOfferMessage.getBytes());
+            os.flush();
+
         } catch (java.io.IOException e) {
             System.out.println(e);
         }
@@ -263,31 +262,34 @@ public class SipOp {
     /**
      * Sends a SIP delayed offer INVITE message to the target SIP device
      *
-     * @param destinationUriDomainPart       The target SIP device
-     * @param destinationUriUserPart The user part of the SIP uri (preceding the '@')
-     * @param sourceIp            The source IP
-     * @param os                  The output stream
-     * @param cseq                The SIP command sequence
+     * @param destinationUriDomainPart The target SIP device
+     * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
+     * @param sourceIp                 The source IP
+     * @param os                       The output stream
+     * @param cseq                     The SIP command sequence
      */
     private void sendDelayedOfferInvite(String destinationUriDomainPart, String destinationUriUserPart,
-                                        String sourceIp, DataOutputStream os, String cseq, String callId) {
+                                        String sourceIp, BufferedOutputStream os, String cseq, String callId) {
         try {
-            // Early offer (sdp included)
-            os.writeBytes("INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n");
-            os.writeBytes("Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n");
-            os.writeBytes("From: <sip:99999@" + sourceIp + ">;tag=456\r\n");
-            os.writeBytes("To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>\r\n");
-            os.writeBytes("Call-ID: " + callId + "@" + sourceIp + "\r\n");
-            os.writeBytes("CSeq: " + cseq + " INVITE\r\n");
-            os.writeBytes("Content-Type: application/sdp\r\n");
-            os.writeBytes("Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n");
-            os.writeBytes("User-Agent: SIP Probe\r\n");
-            os.writeBytes("Max-Forwards: 10\r\n");
-            os.writeBytes("Supported: replaces,timer\r\n");
-            os.writeBytes("P-Asserted-Identity: <sip:99999@" + sourceIp + ">\r\n");
-            os.writeBytes("Allow: INVITE,BYE,CANCEL,ACK,REGISTER,SUBSCRIBE,NOTIFY,MESSAGE,INFO,REFER,OPTIONS,PUBLISH,PRACK\r\n");
-            os.writeBytes("Content-Type: application/sdp\r\n");
-            os.writeBytes("Content-Length: 0\r\n\r\n");
+            String delayedOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+                    "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>\r\n" +
+                    "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
+                    "CSeq: " + cseq + " INVITE\r\n" +
+                    "Content-Type: application/sdp\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "User-Agent: SIP Probe\r\n" +
+                    "Max-Forwards: 10\r\n" +
+                    "Supported: replaces,timer\r\n" +
+                    "P-Asserted-Identity: <sip:99999@" + sourceIp + ">\r\n" +
+                    "Allow: INVITE,BYE,CANCEL,ACK,REGISTER,SUBSCRIBE,NOTIFY,MESSAGE,INFO,REFER,OPTIONS,PUBLISH,PRACK\r\n" +
+                    "Content-Type: application/sdp\r\n" +
+                    "Content-Length: 0\r\n\r\n";
+
+            os.write(delayedOfferMessage.getBytes());
+            os.flush();
+
         } catch (java.io.IOException e) {
             System.out.println(e);
         }
@@ -296,26 +298,30 @@ public class SipOp {
     /**
      * Sends a SIP ACK message to the target device in an early offer exchange
      *
-     * @param destinationUriDomainPart       The target SIP device
-     * @param destinationUriUserPart The user part of the SIP uri (preceding the '@')
-     * @param sourceIp            The source IP
-     * @param os                  The output stream
+     * @param destinationUriDomainPart The target SIP device
+     * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
+     * @param sourceIp                 The source IP
+     * @param os                       The output stream
      * @param responseTag
      */
     private void sendAck(String destinationUriDomainPart, String destinationUriUserPart,
-                         String sourceIp, DataOutputStream os, String responseTag, String callId) {
+                         String sourceIp, BufferedOutputStream os, String responseTag, String callId) {
         try {
-            os.writeBytes("ACK sip:" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n");
-            os.writeBytes("Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n");
-            os.writeBytes("From: <sip:99999@" + sourceIp + ">;tag=456\r\n");
-            os.writeBytes("To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>;tag=" + responseTag + "\r\n");
-            os.writeBytes("CSeq: 1 ACK\r\n");
-            os.writeBytes("Call-ID: " + callId + "@" + sourceIp + "\r\n");
-            os.writeBytes("Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n");
-            os.writeBytes("User-Agent: SIP Probe\r\n");
-            os.writeBytes("Allow: INVITE,ACK,BYE,CANCEL,OPTIONS,INFO,MESSAGE,SUBSCRIBE,NOTIFY,PRACK,UPDATE,REFER\r\n");
-            os.writeBytes("Max-Forwards: 10\r\n");
-            os.writeBytes("Content-Length: 0\r\n\r\n");
+            String ackMessage = "ACK sip:" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+                    "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>;tag=" + responseTag + "\r\n" +
+                    "CSeq: 1 ACK\r\n" +
+                    "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "User-Agent: SIP Probe\r\n" +
+                    "Allow: INVITE,ACK,BYE,CANCEL,OPTIONS,INFO,MESSAGE,SUBSCRIBE,NOTIFY,PRACK,UPDATE,REFER\r\n" +
+                    "Max-Forwards: 10\r\n" +
+                    "Content-Length: 0\r\n\r\n";
+
+            os.write(ackMessage.getBytes());
+            os.flush();
+
         } catch (java.io.IOException e) {
             System.out.println(e);
         }
@@ -325,19 +331,23 @@ public class SipOp {
      * Sends a SIP OPTIONS message to the target device
      *
      * @param destinationUriDomainPart The target SIP device
-     * @param sourceIp      The source IP
-     * @param os            The output stream
+     * @param sourceIp                 The source IP
+     * @param os                       The output stream
      */
-    private void sendOptions(String destinationUriDomainPart, String sourceIp, DataOutputStream os, String callId) {
+    private void sendOptions(String destinationUriDomainPart, String sourceIp, BufferedOutputStream os, String callId) {
         try {
-            os.writeBytes("OPTIONS sip:" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n");
-            os.writeBytes("Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n");
-            os.writeBytes("From: \"SIP Probe\"<sip:99999@" + sourceIp + ":5060>;tag=5678\r\n");
-            os.writeBytes("To: <sip:" + destinationUriDomainPart + ":5060>\r\n");
-            os.writeBytes("Call-ID: " + callId + "\r\n");
-            os.writeBytes("CSeq: 1 OPTIONS\r\n");
-            os.writeBytes("Max-Forwards: 0\r\n");
-            os.writeBytes("Content-Length: 0\r\n\r\n");
+            String optionsMessage = "OPTIONS sip:" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+                    "From: \"SIP Probe\"<sip:99999@" + sourceIp + ":5060>;tag=5678\r\n" +
+                    "To: <sip:" + destinationUriDomainPart + ":5060>\r\n" +
+                    "Call-ID: " + callId + "\r\n" +
+                    "CSeq: 1 OPTIONS\r\n" +
+                    "Max-Forwards: 0\r\n" +
+                    "Content-Length: 0\r\n\r\n";
+
+            os.write(optionsMessage.getBytes());
+            os.flush();
+
         } catch (java.io.IOException e) {
             System.out.println(e);
         }
