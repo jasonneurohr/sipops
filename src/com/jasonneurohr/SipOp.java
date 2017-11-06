@@ -3,6 +3,7 @@ package com.jasonneurohr;
 import java.io.*;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.Scanner;
 
 /**
  * <h1>SipOp</h1>
@@ -14,7 +15,7 @@ import java.net.UnknownHostException;
 public class SipOp {
     private Socket sipSocket = null; // Client socket
     private BufferedOutputStream os = null;
-    private DataInputStream is = null; // Input stream
+    private Scanner is = null;
     private String responseTag = "";
     private boolean okReceived = false;
     private String destinationSipUa;
@@ -22,6 +23,11 @@ public class SipOp {
     private String destinationUriUserPart;
     private String sourceIp;
     private String callId;
+    private String nextLine;
+    private boolean ackSent = false;
+    private Integer contentLength = 0;
+    private int amountRead = 0;
+    private boolean startCounting = false;
 
     /**
      * No-arg constructor sets the callId for the instance
@@ -148,7 +154,7 @@ public class SipOp {
         try {
             sipSocket = new Socket(destinationSipUa, 5060);
             os = new BufferedOutputStream(sipSocket.getOutputStream());
-            is = new DataInputStream(sipSocket.getInputStream());
+            is = new Scanner(new BufferedInputStream(sipSocket.getInputStream()));
         } catch (UnknownHostException e) {
             System.err.println("Don't know about host: hostname");
         } catch (IOException e) {
@@ -168,39 +174,67 @@ public class SipOp {
                     // No need to ACK for OPTIONS
                     // Send OPTIONS, output response and return
                     sendOptions(destinationUriDomainPart, sourceIp, os, callId);
-                    String responseLine;
-                    while ((responseLine = is.readLine()) != null && responseLine.length() > 0) {
-                        System.out.println("Server: " + responseLine);
+                    System.out.println("Received:");
+                    while (is.hasNext()) {
+                        System.out.println(is.nextLine());
                     }
                     return;
-
                 } else {
                     System.out.println("Invalid mode. Enter \"early\", \"delayed\" or \"options\"");
                     return;
                 }
 
-                String responseLine;
+                while (is.hasNext()) {
+                    // Get the next line of input
+                    nextLine = is.nextLine();
+                    System.out.println(nextLine);
 
-                while ((responseLine = is.readLine()) != null) {
-                    System.out.println("Server: " + responseLine);
-
-                    // Received a 200 OK
-                    if (responseLine.contains("SIP/2.0 200 OK")) {
+                    // If received a 200 OK, set receive flag to true
+                    if (!ackSent && nextLine.contains("SIP/2.0 200 OK")) {
                         okReceived = true;
                     }
 
-                    // Grab the returned tag so we can send the ACK
-                    if (okReceived && responseLine.contains("To:")) {
-                        responseTag = responseLine.split("tag=")[1];
-                        if (mode.toLowerCase().equals("early")) {
-                            sendAck(destinationUriDomainPart, destinationUriUserPart, sourceIp, os, responseTag, callId);
-                        } else if (mode.toLowerCase().equals("delayed")) {
-                            // TODO
+                    // If okReceived is true and the line contains the To field
+                    // Grab the ID for later messages
+                    if (!ackSent && okReceived && nextLine.contains("To:")) {
+                        responseTag = nextLine.split("tag=")[1];
+                    }
+
+                    // If okReceived is true and the line contains Content-Length
+                    // Capture the length of the SDP, if its greater then 0
+                    // Set startCounting to true
+                    if (!ackSent && okReceived && nextLine.contains("Content-Length")) {
+                        contentLength = (Integer.parseInt(nextLine.split("Content-Length: ")[1]));
+                        if (contentLength > 0) {
+                            startCounting = true;
                         }
-                        okReceived = false;
+                    }
+
+                    // If startCounting is true increment the amount read
+                    // by the length of the line
+                    if (!ackSent && startCounting) {
+                        amountRead += nextLine.length();
+                    }
+
+                    // If the okReceived is true and amount Read == contentLength - 3
+                    // Send the ACK in response to the received 200OK
+                    // Set the ackSent flag to true
+                    if (!ackSent && okReceived && amountRead == (contentLength - 3)) {
+                        sendAck(destinationUriDomainPart, destinationUriUserPart, sourceIp, os, responseTag, callId, "1");
+                        ackSent = true;
                         break;
+
                     }
                 }
+
+                System.out.println("Tearing down socket");
+                // Tearing down the socket will cause a FIN, ACK to be sent immediately
+                // This could cause unexpected events on the far end, for example
+                // A Cisco Meeting Server will output messages similar to the below to the syslog
+                //
+                // Nov  6 09:51:50 user.info CMS1 host:server:  INFO : SIP trace: connection 12: read failure, code 104
+                // Nov  6 09:51:50 user.info CMS1 host:server:  INFO : SIP trace: connection 12: shutting down...
+
                 os.close(); // close the output stream
                 is.close(); // close the input stream
                 sipSocket.close(); // close the socket
@@ -220,10 +254,25 @@ public class SipOp {
      * @param sourceIp                 The source IP
      * @param os                       The output stream
      * @param cseq                     The SIP command sequence
+     * @param callId                   The callID
      */
     private void sendEarlyOfferInvite(String destinationUriDomainPart, String destinationUriUserPart,
                                       String sourceIp, BufferedOutputStream os, String cseq, String callId) {
         try {
+
+            String sdpContent = "v=0\r\n" +
+                    "o=SP 12345 IN IP4 " + sourceIp + "\r\n" +
+                    "s=-\r\n" +
+                    "p=11111\r\n" +
+                    "t=0 0\r\n" +
+                    "m=audio " + randPort() + " RTP/AVP 8 101\r\n" +
+                    "c=IN IP4 " + sourceIp + "\r\n" +
+                    "a=rtpmap:8 PCMA/8000\r\n" +
+                    "a=rtpmap:101 telephone-event/8000\r\n" +
+                    "a=fmtp:101 0-15\r\n" +
+                    "a=ptime:20\r\n" +
+                    "a=recvonly\r\n\r\n";
+
             String earlyOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
                     "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
                     "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
@@ -238,7 +287,38 @@ public class SipOp {
                     "P-Asserted-Identity: <sip:99999@" + sourceIp + ">\r\n" +
                     "Allow: INVITE,BYE,CANCEL,ACK,REGISTER,SUBSCRIBE,NOTIFY,MESSAGE,INFO,REFER,OPTIONS,PUBLISH,PRACK\r\n" +
                     "Content-Type: application/sdp\r\n" +
-                    "Content-Length: 207\r\n\r\n" +
+                    "Content-Length: " + sdpContent.length() + "\r\n\r\n" +
+                    sdpContent;
+
+            System.out.println();
+            System.out.println("Sending:");
+            System.out.println(earlyOfferMessage);
+
+            os.write(earlyOfferMessage.getBytes());
+            os.flush();
+
+        } catch (java.io.IOException e) {
+            System.out.println(e);
+        }
+    }
+
+    /**
+     * Sends a SIP early offer INVITE message to the target SIP device.
+     * Includes the responseTag such that a RE-INVITE can be sent
+     *
+     * @param destinationUriDomainPart The target SIP device
+     * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
+     * @param sourceIp                 The source IP
+     * @param os                       The output stream
+     * @param cseq                     The SIP command sequence
+     * @param callId                   The callID
+     * @param responseTag              The tag returned from the far end SIP UA
+     */
+    private void sendEarlyOfferInvite(String destinationUriDomainPart, String destinationUriUserPart,
+                                      String sourceIp, BufferedOutputStream os, String cseq, String callId, String responseTag) {
+        try {
+
+            String sdpContent = "v=0\r\n" +
                     "o=SP 12345 IN IP4 " + sourceIp + "\r\n" +
                     "s=-\r\n" +
                     "p=11111\r\n" +
@@ -249,7 +329,28 @@ public class SipOp {
                     "a=rtpmap:101 telephone-event/8000\r\n" +
                     "a=fmtp:101 0-15\r\n" +
                     "a=ptime:20\r\n" +
-                    "a=sendrecv\r\n\r\n";
+                    "a=recvonly\r\n\r\n";
+
+            String earlyOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+                    "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>;tag=" + responseTag + "\r\n" + // TODO: utilise To header from earlier messaging
+                    "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
+                    "CSeq: " + cseq + " INVITE\r\n" +
+                    "Content-Type: application/sdp\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "User-Agent: SIP Probe\r\n" +
+                    "Max-Forwards: 10\r\n" +
+                    "Supported: replaces,timer\r\n" +
+                    "P-Asserted-Identity: <sip:99999@" + sourceIp + ">\r\n" +
+                    "Allow: INVITE,BYE,CANCEL,ACK,REGISTER,SUBSCRIBE,NOTIFY,MESSAGE,INFO,REFER,OPTIONS,PUBLISH,PRACK\r\n" +
+                    "Content-Type: application/sdp\r\n" +
+                    "Content-Length: " + sdpContent.length() + "\r\n\r\n" +
+                    sdpContent;
+
+            System.out.println();
+            System.out.println("Sending:");
+            System.out.println(earlyOfferMessage);
 
             os.write(earlyOfferMessage.getBytes());
             os.flush();
@@ -302,22 +403,28 @@ public class SipOp {
      * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
      * @param sourceIp                 The source IP
      * @param os                       The output stream
-     * @param responseTag
+     * @param responseTag              The tag returned from the far end SIP UA
+     * @param callId                   The callID
+     * @param cseq                     The SIP command sequence
      */
     private void sendAck(String destinationUriDomainPart, String destinationUriUserPart,
-                         String sourceIp, BufferedOutputStream os, String responseTag, String callId) {
+                         String sourceIp, BufferedOutputStream os, String responseTag, String callId, String cseq) {
         try {
             String ackMessage = "ACK sip:" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
                     "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
                     "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
-                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>;tag=" + responseTag + "\r\n" +
-                    "CSeq: 1 ACK\r\n" +
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>;tag=" + responseTag + "\r\n" + // TODO: utilise To header from earlier messaging
+                    "CSeq: " + cseq + " ACK\r\n" +
                     "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
                     "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
                     "User-Agent: SIP Probe\r\n" +
                     "Allow: INVITE,ACK,BYE,CANCEL,OPTIONS,INFO,MESSAGE,SUBSCRIBE,NOTIFY,PRACK,UPDATE,REFER\r\n" +
                     "Max-Forwards: 10\r\n" +
                     "Content-Length: 0\r\n\r\n";
+
+            System.out.println();
+            System.out.println("Sending:");
+            System.out.println(ackMessage);
 
             os.write(ackMessage.getBytes());
             os.flush();
