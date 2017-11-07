@@ -37,10 +37,20 @@ public class SipOp {
     }
 
     /**
+     * @param destinationSipUa The target SIP device
+     * @param sourceIp         The source IP
+     */
+    SipOp(String destinationSipUa, String sourceIp) {
+        this.destinationSipUa = destinationSipUa;
+        this.sourceIp = sourceIp;
+    }
+
+    /**
      * Constructs a SipOp instance with provided parameters and a callId
      *
-     * @param destinationUriDomainPart The target SIP device
+     * @param destinationSipUa         The target SIP device
      * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
+     * @param destinationUriDomainPart The domain part of the SIP uri (following the '@')
      * @param sourceIp                 The source IP
      */
     SipOp(String destinationSipUa, String destinationUriUserPart, String destinationUriDomainPart, String sourceIp) {
@@ -173,14 +183,13 @@ public class SipOp {
 
                     // No need to ACK for OPTIONS
                     // Send OPTIONS, output response and return
-                    sendOptions(destinationUriDomainPart, sourceIp, os, callId);
+                    sendOptions(destinationSipUa, sourceIp, os, callId);
                     System.out.println("Received:");
                     while (is.hasNext()) {
                         System.out.println(is.nextLine());
                     }
                     return;
                 } else {
-                    System.out.println("Invalid mode. Enter \"early\", \"delayed\" or \"options\"");
                     return;
                 }
 
@@ -441,12 +450,12 @@ public class SipOp {
      * @param sourceIp                 The source IP
      * @param os                       The output stream
      */
-    private void sendOptions(String destinationUriDomainPart, String sourceIp, BufferedOutputStream os, String callId) {
+    private void sendOptions(String destinationSipUa, String sourceIp, BufferedOutputStream os, String callId) {
         try {
-            String optionsMessage = "OPTIONS sip:" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
+            String optionsMessage = "OPTIONS sip:" + destinationSipUa + ":5060;transport=tcp SIP/2.0\r\n" +
                     "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
                     "From: \"SIP Probe\"<sip:99999@" + sourceIp + ":5060>;tag=5678\r\n" +
-                    "To: <sip:" + destinationUriDomainPart + ":5060>\r\n" +
+                    "To: <sip:" + destinationSipUa + ":5060>\r\n" +
                     "Call-ID: " + callId + "\r\n" +
                     "CSeq: 1 OPTIONS\r\n" +
                     "Max-Forwards: 0\r\n" +
