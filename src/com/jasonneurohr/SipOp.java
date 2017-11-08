@@ -1,5 +1,7 @@
 package com.jasonneurohr;
 
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 import java.io.*;
 import java.net.Socket;
 import java.net.UnknownHostException;
@@ -14,10 +16,15 @@ import java.util.Scanner;
  */
 public class SipOp {
     private Socket sipSocket = null; // Client socket
+    private SSLSocketFactory sslSocketFactory = null;
+    private SSLSocket sslSocket = null;
     private BufferedOutputStream os = null;
     private Scanner is = null;
     private String responseTag = "";
     private boolean okReceived = false;
+    private boolean useSipTls = false;
+    private String destinationPort;
+    private String keyStorePath;
     private String destinationSipUa;
     private String destinationUriDomainPart;
     private String destinationUriUserPart;
@@ -46,6 +53,22 @@ public class SipOp {
     }
 
     /**
+     * @param destinationSipUa The target SIP device
+     * @param sourceIp         The source IP
+     */
+    SipOp(String destinationSipUa, String sourceIp, boolean useSipTls, String keyStorePath) {
+        this.destinationSipUa = destinationSipUa;
+        this.sourceIp = sourceIp;
+        this.keyStorePath = keyStorePath;
+        this.useSipTls = useSipTls;
+        if (useSipTls) {
+            this.destinationPort = "5061";
+        } else {
+            this.destinationPort = "5060";
+        }
+    }
+
+    /**
      * Constructs a SipOp instance with provided parameters and a callId
      *
      * @param destinationSipUa         The target SIP device
@@ -59,6 +82,30 @@ public class SipOp {
         this.destinationUriDomainPart = destinationUriDomainPart;
         this.sourceIp = sourceIp;
         this.callId = callId();
+    }
+
+    /**
+     * Constructs a SipOp instance with provided parameters and a callId
+     *
+     * @param destinationSipUa         The target SIP device
+     * @param destinationUriUserPart   The user part of the SIP uri (preceding the '@')
+     * @param destinationUriDomainPart The domain part of the SIP uri (following the '@')
+     * @param sourceIp                 The source IP
+     */
+    SipOp(String destinationSipUa, String destinationUriUserPart, String destinationUriDomainPart,
+          String sourceIp, boolean useSipTls, String keyStorePath) {
+        this.destinationSipUa = destinationSipUa;
+        this.destinationUriUserPart = destinationUriUserPart;
+        this.destinationUriDomainPart = destinationUriDomainPart;
+        this.sourceIp = sourceIp;
+        this.callId = callId();
+        this.keyStorePath = keyStorePath;
+        this.useSipTls = useSipTls;
+        if (useSipTls) {
+            this.destinationPort = "5061";
+        } else {
+            this.destinationPort = "5060";
+        }
     }
 
     /**
@@ -162,9 +209,19 @@ public class SipOp {
         // Try to open a socket
         // Try to open input and output streams
         try {
-            sipSocket = new Socket(destinationSipUa, 5060);
-            os = new BufferedOutputStream(sipSocket.getOutputStream());
-            is = new Scanner(new BufferedInputStream(sipSocket.getInputStream()));
+            if (!useSipTls) {
+                sipSocket = new Socket(destinationSipUa, 5060);
+                os = new BufferedOutputStream(sipSocket.getOutputStream());
+                is = new Scanner(new BufferedInputStream(sipSocket.getInputStream()));
+            }
+
+            if (useSipTls) {
+                System.setProperty("javax.net.ssl.trustStore", keyStorePath);
+                sslSocketFactory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+                sslSocket = (SSLSocket) sslSocketFactory.createSocket(destinationSipUa, 5061);
+                os = new BufferedOutputStream(sslSocket.getOutputStream());
+                is = new Scanner(new BufferedInputStream(sslSocket.getInputStream()));
+            }
         } catch (UnknownHostException e) {
             System.err.println("Don't know about host: hostname");
         } catch (IOException e) {
@@ -173,17 +230,20 @@ public class SipOp {
 
         // If everything has been initialized then we want to write some data
         // to the socket we have opened a connection to
-        if (sipSocket != null && os != null && is != null) {
+        if ((sipSocket != null || sslSocket != null) && os != null && is != null) {
+
             try {
                 if (mode.toLowerCase().equals("early")) {
-                    sendEarlyOfferInvite(destinationUriDomainPart, destinationUriUserPart, sourceIp, os, "1", callId);
+                    sendEarlyOfferInvite(destinationUriDomainPart, destinationUriUserPart,
+                            sourceIp, os, "1", callId, destinationPort);
                 } else if (mode.toLowerCase().equals("delayed")) {
-                    sendDelayedOfferInvite(destinationUriDomainPart, destinationUriUserPart, sourceIp, os, "1", callId);
+                    sendDelayedOfferInvite(destinationUriDomainPart, destinationUriUserPart,
+                            sourceIp, os, "1", callId, destinationPort);
                 } else if (mode.toLowerCase().equals("options")) {
 
                     // No need to ACK for OPTIONS
                     // Send OPTIONS, output response and return
-                    sendOptions(destinationSipUa, sourceIp, os, callId);
+                    sendOptions(destinationSipUa, sourceIp, os, callId, destinationPort);
                     System.out.println("Received:");
                     while (is.hasNext()) {
                         System.out.println(is.nextLine());
@@ -229,7 +289,8 @@ public class SipOp {
                     // Send the ACK in response to the received 200OK
                     // Set the ackSent flag to true
                     if (!ackSent && okReceived && amountRead == (contentLength - 3)) {
-                        sendAck(destinationUriDomainPart, destinationUriUserPart, sourceIp, os, responseTag, callId, "1");
+                        sendAck(destinationUriDomainPart, destinationUriUserPart,
+                                sourceIp, os, responseTag, callId, "1", destinationPort);
                         ackSent = true;
                         break;
 
@@ -246,7 +307,11 @@ public class SipOp {
 
                 os.close(); // close the output stream
                 is.close(); // close the input stream
-                sipSocket.close(); // close the socket
+                if (!useSipTls) {
+                    sipSocket.close(); // close the socket
+                } else if (useSipTls) {
+                    sslSocket.close();
+                }
             } catch (UnknownHostException e) {
                 System.err.println("Trying to connect to unknown host: " + e);
             } catch (IOException e) {
@@ -266,7 +331,9 @@ public class SipOp {
      * @param callId                   The callID
      */
     private void sendEarlyOfferInvite(String destinationUriDomainPart, String destinationUriUserPart,
-                                      String sourceIp, BufferedOutputStream os, String cseq, String callId) {
+                                      String sourceIp, BufferedOutputStream os, String cseq, String callId,
+                                      String destinationPort) {
+
         try {
 
             String sdpContent = "v=0\r\n" +
@@ -282,14 +349,14 @@ public class SipOp {
                     "a=ptime:20\r\n" +
                     "a=recvonly\r\n\r\n";
 
-            String earlyOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
-                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+            String earlyOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":" + destinationPort + ";transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":" + destinationPort + ";branch=1234\r\n" +
                     "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
-                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>\r\n" +
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":" + destinationPort + ">\r\n" +
                     "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
                     "CSeq: " + cseq + " INVITE\r\n" +
                     "Content-Type: application/sdp\r\n" +
-                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":" + destinationPort + ";transport=tcp>\r\n" +
                     "User-Agent: SIP Probe\r\n" +
                     "Max-Forwards: 10\r\n" +
                     "Supported: replaces,timer\r\n" +
@@ -324,7 +391,8 @@ public class SipOp {
      * @param responseTag              The tag returned from the far end SIP UA
      */
     private void sendEarlyOfferInvite(String destinationUriDomainPart, String destinationUriUserPart,
-                                      String sourceIp, BufferedOutputStream os, String cseq, String callId, String responseTag) {
+                                      String sourceIp, BufferedOutputStream os, String cseq, String callId,
+                                      String destinationPort, String responseTag) {
         try {
 
             String sdpContent = "v=0\r\n" +
@@ -340,14 +408,14 @@ public class SipOp {
                     "a=ptime:20\r\n" +
                     "a=recvonly\r\n\r\n";
 
-            String earlyOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
-                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+            String earlyOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":" + destinationPort + ";transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":" + destinationPort + ";branch=1234\r\n" +
                     "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
-                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>;tag=" + responseTag + "\r\n" + // TODO: utilise To header from earlier messaging
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":" + destinationPort + ">;tag=" + responseTag + "\r\n" + // TODO: utilise To header from earlier messaging
                     "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
                     "CSeq: " + cseq + " INVITE\r\n" +
                     "Content-Type: application/sdp\r\n" +
-                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":" + destinationPort + ";transport=tcp>\r\n" +
                     "User-Agent: SIP Probe\r\n" +
                     "Max-Forwards: 10\r\n" +
                     "Supported: replaces,timer\r\n" +
@@ -379,16 +447,17 @@ public class SipOp {
      * @param cseq                     The SIP command sequence
      */
     private void sendDelayedOfferInvite(String destinationUriDomainPart, String destinationUriUserPart,
-                                        String sourceIp, BufferedOutputStream os, String cseq, String callId) {
+                                        String sourceIp, BufferedOutputStream os, String cseq, String callId,
+                                        String destinationPort) {
         try {
-            String delayedOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
-                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+            String delayedOfferMessage = "INVITE sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":" + destinationPort + ";transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":" + destinationPort + ";branch=1234\r\n" +
                     "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
-                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>\r\n" +
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":" + destinationPort + ">\r\n" +
                     "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
                     "CSeq: " + cseq + " INVITE\r\n" +
                     "Content-Type: application/sdp\r\n" +
-                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":" + destinationPort + ";transport=tcp>\r\n" +
                     "User-Agent: SIP Probe\r\n" +
                     "Max-Forwards: 10\r\n" +
                     "Supported: replaces,timer\r\n" +
@@ -417,15 +486,16 @@ public class SipOp {
      * @param cseq                     The SIP command sequence
      */
     private void sendAck(String destinationUriDomainPart, String destinationUriUserPart,
-                         String sourceIp, BufferedOutputStream os, String responseTag, String callId, String cseq) {
+                         String sourceIp, BufferedOutputStream os, String responseTag, String callId, String cseq,
+                         String destinationPort) {
         try {
-            String ackMessage = "ACK sip:" + destinationUriDomainPart + ":5060;transport=tcp SIP/2.0\r\n" +
-                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
+            String ackMessage = "ACK sip:" + destinationUriDomainPart + ":" + destinationPort + ";transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":" + destinationPort + ";branch=1234\r\n" +
                     "From: <sip:99999@" + sourceIp + ">;tag=456\r\n" +
-                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":5060>;tag=" + responseTag + "\r\n" + // TODO: utilise To header from earlier messaging
+                    "To: <sip:" + destinationUriUserPart + "@" + destinationUriDomainPart + ":" + destinationPort + ">;tag=" + responseTag + "\r\n" + // TODO: utilise To header from earlier messaging
                     "CSeq: " + cseq + " ACK\r\n" +
                     "Call-ID: " + callId + "@" + sourceIp + "\r\n" +
-                    "Contact: <sip:99999@" + sourceIp + ":5060;transport=tcp>\r\n" +
+                    "Contact: <sip:99999@" + sourceIp + ":" + destinationPort + ";transport=tcp>\r\n" +
                     "User-Agent: SIP Probe\r\n" +
                     "Allow: INVITE,ACK,BYE,CANCEL,OPTIONS,INFO,MESSAGE,SUBSCRIBE,NOTIFY,PRACK,UPDATE,REFER\r\n" +
                     "Max-Forwards: 10\r\n" +
@@ -446,16 +516,17 @@ public class SipOp {
     /**
      * Sends a SIP OPTIONS message to the target device
      *
-     * @param destinationUriDomainPart The target SIP device
-     * @param sourceIp                 The source IP
-     * @param os                       The output stream
+     * @param destinationSipUa The target SIP device
+     * @param sourceIp         The source IP
+     * @param os               The output stream
      */
-    private void sendOptions(String destinationSipUa, String sourceIp, BufferedOutputStream os, String callId) {
+    private void sendOptions(String destinationSipUa, String sourceIp, BufferedOutputStream os, String callId,
+                             String destinationPort) {
         try {
-            String optionsMessage = "OPTIONS sip:" + destinationSipUa + ":5060;transport=tcp SIP/2.0\r\n" +
-                    "Via: SIP/2.0/TCP " + sourceIp + ":5060;branch=1234\r\n" +
-                    "From: \"SIP Probe\"<sip:99999@" + sourceIp + ":5060>;tag=5678\r\n" +
-                    "To: <sip:" + destinationSipUa + ":5060>\r\n" +
+            String optionsMessage = "OPTIONS sip:" + destinationSipUa + ":" + destinationPort + ";transport=tcp SIP/2.0\r\n" +
+                    "Via: SIP/2.0/TCP " + sourceIp + ":" + destinationPort + ";branch=1234\r\n" +
+                    "From: \"SIP Probe\"<sip:99999@" + sourceIp + ":" + destinationPort + ">;tag=5678\r\n" +
+                    "To: <sip:" + destinationSipUa + ":" + destinationPort + ">\r\n" +
                     "Call-ID: " + callId + "\r\n" +
                     "CSeq: 1 OPTIONS\r\n" +
                     "Max-Forwards: 0\r\n" +
